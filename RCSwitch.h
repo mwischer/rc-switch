@@ -56,7 +56,11 @@
 
 // Number of maximum High/Low changes per packet.
 // We can handle up to (unsigned long) => 32 bit * 2 H/L changes per bit + 2 for sync
-#define RCSWITCH_MAX_CHANGES 67
+//#define RCSWITCH_MAX_CHANGES 67
+// THIS LIMIT ABOVE DOESN'T WORK FOR TEMP SENSORS (36 BIT)
+// Number of maximum High/Low changes per packet.
+// We can handle up to (unsigned long) => 36 bit * 2 H/L changes per bit + 2 for sync
+#define RCSWITCH_MAX_CHANGES 75
 
 class RCSwitch {
 
