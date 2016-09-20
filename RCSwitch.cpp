@@ -91,12 +91,13 @@ unsigned long RCSwitch::nReceivedValue = 0;
 unsigned int RCSwitch::nReceivedBitlength = 0;
 unsigned int RCSwitch::nReceivedDelay = 0;
 unsigned int RCSwitch::nReceivedProtocol = 0;
-int RCSwitch::nReceiveTolerance = 60;
+int RCSwitch::nReceiveTolerance = 100;
 const unsigned int RCSwitch::nSeparationLimit = 8000;
 // separationLimit: minimum microseconds between received codes, closer codes are ignored.
 // according to discussion on issue #14 it might be more suitable to set the separation
 // limit to the same time as the 'low' part of the sync signal for the current protocol.
 unsigned int RCSwitch::timings[RCSWITCH_MAX_CHANGES];
+unsigned int RCSwitch::pulsLengths[RCSWITCH_MAX_PULS_LENGTH];
 #endif
 
 RCSwitch::RCSwitch() {
@@ -587,6 +588,10 @@ unsigned int* RCSwitch::getReceivedRawdata() {
   return RCSwitch::timings;
 }
 
+unsigned int* RCSwitch::getReceivedRawLengths() {
+  return RCSwitch::pulsLengths;
+}
+
 /* helper function for the receiveProtocol method */
 static inline unsigned int diff(int A, int B) {
   return abs(A - B);
@@ -653,6 +658,47 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
     return true;
 }
 
+bool RECEIVE_ATTR RCSwitch::compressTimings(unsigned int changeCount) {
+  unsigned int cntTimings = 0;
+  unsigned int dur;
+  bool added = false;
+  for (unsigned int i = 1; i < changeCount; ++i) {
+    dur = RCSwitch::timings[i];
+    
+    if (dur <= RCSwitch::nReceiveTolerance) {
+      return false;
+    }
+    
+    added = false;
+    for (unsigned int j = 0; j < cntTimings; ++j) {
+      if (diff(dur, RCSwitch::pulsLengths[j]) < RCSwitch::nReceiveTolerance) {
+	RCSwitch::timings[i] = j;
+	added = true;
+	break;
+      }
+    }
+    if (!added) {
+      if (cntTimings < RCSWITCH_MAX_PULS_LENGTH) {
+	RCSwitch::pulsLengths[cntTimings] = dur;
+	RCSwitch::timings[i] = cntTimings++;
+      } else {
+	cntTimings++;
+      }
+    }
+  }
+       
+  if (changeCount > 40 && cntTimings <= RCSWITCH_MAX_PULS_LENGTH) {
+    // ignore very short transmissions: no device sends them, so this must be noise
+    RCSwitch::nReceivedValue = 0xaffe;
+    RCSwitch::nReceivedBitlength = (changeCount - 1) / 2;
+    RCSwitch::nReceivedDelay = cntTimings;
+    RCSwitch::nReceivedProtocol = 1;
+    return true;
+  }
+
+  return false;
+}
+
 void RECEIVE_ATTR RCSwitch::handleInterrupt() {
 
   static unsigned int changeCount = 0;
@@ -665,21 +711,13 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   if (duration > RCSwitch::nSeparationLimit) {
     // A long stretch without signal level change occurred. This could
     // be the gap between two transmission.
-    if (diff(duration, RCSwitch::timings[0]) < 200) {
-      // This long signal is close in length to the long signal which
-      // started the previously recorded timings; this suggests that
-      // it may indeed by a a gap between two transmissions (we assume
-      // here that a sender will send the signal multiple times,
-      // with roughly the same gap between them).
-      repeatCount++;
-      if (repeatCount == 2) {
-        for(unsigned int i = 1; i <= numProto; i++) {
-          if (receiveProtocol(i, changeCount)) {
-            // receive succeeded for protocol i
-            break;
-          }
-        }
-        repeatCount = 0;
+    repeatCount++;
+    if (repeatCount >= 2) {
+      memset(RCSwitch::pulsLengths, 0, sizeof(RCSwitch::pulsLengths));
+      if (!RCSwitch::compressTimings(changeCount)) {
+	RCSwitch::nReceivedValue = 0;
+	RCSwitch::nReceivedBitlength = 0;
+  	repeatCount = 0;
       }
     }
     changeCount = 0;

@@ -62,7 +62,7 @@
 // We can handle up to (unsigned long) => 36 bit * 2 H/L changes per bit + 2 for sync
 #define RCSWITCH_MAX_CHANGES 75
 // Number of different puls length
-#define RCSWITCH_MAX_PULS_LENGTH 4
+#define RCSWITCH_MAX_PULS_LENGTH 6
 
 class RCSwitch {
 
@@ -96,6 +96,7 @@ class RCSwitch {
     unsigned int getReceivedDelay();
     unsigned int getReceivedProtocol();
     unsigned int* getReceivedRawdata();
+    unsigned int* getReceivedRawLengths();
     #endif
   
     void enableTransmit(int nTransmitterPin);
@@ -134,6 +135,7 @@ class RCSwitch {
     #if not defined( RCSwitchDisableReceiving )
     static void handleInterrupt();
     static bool receiveProtocol(const int p, unsigned int changeCount);
+    static bool compressTimings(unsigned int changeCount);
     int nReceiverInterrupt;
     #endif
     int nTransmitterPin;
@@ -151,8 +153,8 @@ class RCSwitch {
     /* 
      * timings[0] contains sync timing, followed by a number of bits
      */
-    static unsigned int timings[4*RCSWITCH_MAX_CHANGES];
-    static unsigned int pulseLengths[RCSWITCH_MAX_PULS_LENGTH];
+    static unsigned int timings[RCSWITCH_MAX_CHANGES];
+    static unsigned int pulsLengths[RCSWITCH_MAX_PULS_LENGTH];
     #endif
 
     
