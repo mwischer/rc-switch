@@ -91,13 +91,13 @@ unsigned long RCSwitch::nReceivedValue = 0;
 unsigned int RCSwitch::nReceivedBitlength = 0;
 unsigned int RCSwitch::nReceivedDelay = 0;
 unsigned int RCSwitch::nReceivedProtocol = 0;
-int RCSwitch::nReceiveTolerance = 100;
+int RCSwitch::nReceiveTolerance = 50;
 const unsigned int RCSwitch::nSeparationLimit = 8000;
 // separationLimit: minimum microseconds between received codes, closer codes are ignored.
 // according to discussion on issue #14 it might be more suitable to set the separation
 // limit to the same time as the 'low' part of the sync signal for the current protocol.
 unsigned int RCSwitch::timings[RCSWITCH_MAX_CHANGES];
-unsigned int RCSwitch::pulsLengths[RCSWITCH_MAX_PULS_LENGTH];
+unsigned int RCSwitch::pulsLengths[RCSWITCH_MAX_PULSES];
 #endif
 
 RCSwitch::RCSwitch() {
@@ -597,139 +597,81 @@ static inline unsigned int diff(int A, int B) {
   return abs(A - B);
 }
 
-/**
- *
- */
-bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCount) {
-#ifdef ESP8266
-    const Protocol &pro = proto[p-1];
-#else
-    Protocol pro;
-    memcpy_P(&pro, &proto[p-1], sizeof(Protocol));
-#endif
-
-    unsigned long code = 0;
-    //Assuming the longer pulse length is the pulse captured in timings[0]
-    const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);
-    const unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
-    const unsigned int delayTolerance = delay * RCSwitch::nReceiveTolerance / 100;
-    
-    /* For protocols that start low, the sync period looks like
-     *               _________
-     * _____________|         |XXXXXXXXXXXX|
-     *
-     * |--1st dur--|-2nd dur-|-Start data-|
-     *
-     * The 3rd saved duration starts the data.
-     *
-     * For protocols that start high, the sync period looks like
-     *
-     *  ______________
-     * |              |____________|XXXXXXXXXXXXX|
-     *
-     * |-filtered out-|--1st dur--|--Start data--|
-     *
-     * The 2nd saved duration starts the data
-     */
-    const unsigned int firstDataTiming = (pro.invertedSignal) ? (2) : (1);
-
-    for (unsigned int i = firstDataTiming; i < changeCount - 1; i += 2) {
-        code <<= 1;
-        if (diff(RCSwitch::timings[i], delay * pro.zero.high) < delayTolerance &&
-            diff(RCSwitch::timings[i + 1], delay * pro.zero.low) < delayTolerance) {
-            // zero
-        } else if (diff(RCSwitch::timings[i], delay * pro.one.high) < delayTolerance &&
-                   diff(RCSwitch::timings[i + 1], delay * pro.one.low) < delayTolerance) {
-            // one
-            code |= 1;
-        } else {
-            // Failed
-            return false;
-        }
-    }
-
-    if (changeCount > 7) {    // ignore very short transmissions: no device sends them, so this must be noise
-        RCSwitch::nReceivedValue = code;
-        RCSwitch::nReceivedBitlength = (changeCount - 1) / 2;
-        RCSwitch::nReceivedDelay = delay;
-        RCSwitch::nReceivedProtocol = p;
-    }
-
-    return true;
-}
-
 bool RECEIVE_ATTR RCSwitch::compressTimings(unsigned int changeCount) {
-  unsigned int cntTimings = 0;
-  unsigned int dur;
-  bool added = false;
-  for (unsigned int i = 1; i < changeCount; ++i) {
-    dur = RCSwitch::timings[i];
-    
-    if (dur <= RCSwitch::nReceiveTolerance) {
-      return false;
-    }
-    
-    added = false;
-    for (unsigned int j = 0; j < cntTimings; ++j) {
-      if (diff(dur, RCSwitch::pulsLengths[j]) < RCSwitch::nReceiveTolerance) {
-	RCSwitch::timings[i] = j;
-	added = true;
-	break;
-      }
-    }
-    if (!added) {
-      if (cntTimings < RCSWITCH_MAX_PULS_LENGTH) {
-	RCSwitch::pulsLengths[cntTimings] = dur;
-	RCSwitch::timings[i] = cntTimings++;
-      } else {
-	cntTimings++;
-      }
-    }
-  }
-       
-  if (changeCount > 40 && cntTimings <= RCSWITCH_MAX_PULS_LENGTH) {
-    // ignore very short transmissions: no device sends them, so this must be noise
-    RCSwitch::nReceivedValue = 0xaffe;
-    RCSwitch::nReceivedBitlength = (changeCount - 1) / 2;
-    RCSwitch::nReceivedDelay = cntTimings;
-    RCSwitch::nReceivedProtocol = 1;
-    return true;
-  }
+   unsigned int cntTimings = 0;
+   unsigned int maxDiff;
+   unsigned int dur;
+   bool added = false;
 
-  return false;
+   for (unsigned int i = 1; i < changeCount; ++i) {
+      dur = RCSwitch::timings[i];
+      if (dur <= RCSWITCH_MIN_PULS_LENGTH) {
+         return false;
+      }
+
+      added = false;
+      for (unsigned int j = 0; j < cntTimings; ++j) {
+         maxDiff = RCSwitch::pulsLengths[j] * RCSwitch::nReceiveTolerance / 100;
+         if (diff(dur, RCSwitch::pulsLengths[j]) <= maxDiff) {
+            RCSwitch::timings[i] = j;
+            RCSwitch::pulsLengths[j] = RCSwitch::pulsLengths[j] + dur / 2;
+            added = true;
+            break;
+         }
+      }
+      if (!added) {
+         if (cntTimings < RCSWITCH_MAX_PULSES) {
+            RCSwitch::pulsLengths[cntTimings] = dur;
+            RCSwitch::timings[i] = cntTimings++;
+         } else {
+            cntTimings++;
+         }
+      }
+   }
+
+   if (changeCount > RCSWITCH_MIN_CHANGES && cntTimings <= RCSWITCH_MAX_PULSES) {
+      // ignore very short transmissions: no device sends them, so this must be noise
+      RCSwitch::nReceivedValue = 1; // dummy value because decoding is deferred via mqtt message
+      RCSwitch::nReceivedBitlength = (changeCount - 1) / 2;
+      RCSwitch::nReceivedDelay = cntTimings;
+      RCSwitch::nReceivedProtocol = 1;
+      return true;
+   }
+
+   return false;
 }
 
 void RECEIVE_ATTR RCSwitch::handleInterrupt() {
 
-  static unsigned int changeCount = 0;
-  static unsigned long lastTime = 0;
-  static unsigned int repeatCount = 0;
+   static unsigned int changeCount = 0;
+   static unsigned long lastTime = 0;
+   static unsigned int repeatCount = 0;
 
-  const long time = micros();
-  const unsigned int duration = time - lastTime;
+   const long time = micros();
+   const unsigned int duration = time - lastTime;
 
-  if (duration > RCSwitch::nSeparationLimit) {
-    // A long stretch without signal level change occurred. This could
-    // be the gap between two transmission.
-    repeatCount++;
-    if (repeatCount >= 2) {
-      memset(RCSwitch::pulsLengths, 0, sizeof(RCSwitch::pulsLengths));
-      if (!RCSwitch::compressTimings(changeCount)) {
-	RCSwitch::nReceivedValue = 0;
-	RCSwitch::nReceivedBitlength = 0;
-  	repeatCount = 0;
+   if (duration > RCSwitch::nSeparationLimit) {
+      // A long stretch without signal level change occurred. This could
+      // be the gap between two transmission.
+      repeatCount++;
+      if (repeatCount >= 1) {
+         memset(RCSwitch::pulsLengths, 0, sizeof(RCSwitch::pulsLengths));
+         if (!RCSwitch::compressTimings(changeCount)) {
+            RCSwitch::nReceivedValue = 0;
+            RCSwitch::nReceivedBitlength = 0;
+            repeatCount = 0;
+         }
       }
-    }
-    changeCount = 0;
-  }
- 
-  // detect overflow
-  if (changeCount >= RCSWITCH_MAX_CHANGES) {
-    changeCount = 0;
-    repeatCount = 0;
-  }
+      changeCount = 0;
+   }
 
-  RCSwitch::timings[changeCount++] = duration;
-  lastTime = time;  
+   // detect overflow
+   if (changeCount >= RCSWITCH_MAX_CHANGES) {
+      changeCount = 0;
+      repeatCount = 0;
+   }
+
+   RCSwitch::timings[changeCount++] = duration;
+   lastTime = time;
 }
 #endif
