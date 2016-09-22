@@ -91,12 +91,13 @@ unsigned long RCSwitch::nReceivedValue = 0;
 unsigned int RCSwitch::nReceivedBitlength = 0;
 unsigned int RCSwitch::nReceivedDelay = 0;
 unsigned int RCSwitch::nReceivedProtocol = 0;
-int RCSwitch::nReceiveTolerance = 50;
+int RCSwitch::nReceiveTolerance = 0;
 const unsigned int RCSwitch::nSeparationLimit = 8000;
 // separationLimit: minimum microseconds between received codes, closer codes are ignored.
 // according to discussion on issue #14 it might be more suitable to set the separation
 // limit to the same time as the 'low' part of the sync signal for the current protocol.
 unsigned int RCSwitch::timings[RCSWITCH_MAX_CHANGES];
+char RCSwitch::compressedTimings[RCSWITCH_MAX_CHANGES];
 unsigned int RCSwitch::pulsLengths[RCSWITCH_MAX_PULSES];
 #endif
 
@@ -106,8 +107,9 @@ RCSwitch::RCSwitch() {
   this->setProtocol(1);
   #if not defined( RCSwitchDisableReceiving )
   this->nReceiverInterrupt = -1;
-  this->setReceiveTolerance(60);
+  this->setReceiveTolerance(40);
   RCSwitch::nReceivedValue = 0;
+  memset(RCSwitch::compressedTimings, 0 , sizeof(RCSwitch::compressedTimings));
   #endif
 }
 
@@ -584,8 +586,8 @@ unsigned int RCSwitch::getReceivedProtocol() {
   return RCSwitch::nReceivedProtocol;
 }
 
-unsigned int* RCSwitch::getReceivedRawdata() {
-  return RCSwitch::timings;
+char* RCSwitch::getReceivedRawdata() {
+  return RCSwitch::compressedTimings;
 }
 
 unsigned int* RCSwitch::getReceivedRawLengths() {
@@ -601,6 +603,7 @@ bool RECEIVE_ATTR RCSwitch::compressTimings(unsigned int changeCount) {
    unsigned int cntTimings = 0;
    unsigned int maxDiff;
    unsigned int dur;
+   unsigned int pos = 0;
    bool added = false;
 
    for (unsigned int i = 1; i < changeCount; ++i) {
@@ -611,10 +614,12 @@ bool RECEIVE_ATTR RCSwitch::compressTimings(unsigned int changeCount) {
 
       added = false;
       for (unsigned int j = 0; j < cntTimings; ++j) {
-         maxDiff = RCSwitch::pulsLengths[j] * RCSwitch::nReceiveTolerance / 100;
+         maxDiff = (RCSwitch::pulsLengths[j] * RCSwitch::nReceiveTolerance) / 100;
          if (diff(dur, RCSwitch::pulsLengths[j]) <= maxDiff) {
-            RCSwitch::timings[i] = j;
-            RCSwitch::pulsLengths[j] = RCSwitch::pulsLengths[j] + dur / 2;
+
+            RCSwitch::compressedTimings[pos++] = '0' + j;
+
+            RCSwitch::pulsLengths[j] = (RCSwitch::pulsLengths[j] + dur) / 2;
             added = true;
             break;
          }
@@ -622,7 +627,7 @@ bool RECEIVE_ATTR RCSwitch::compressTimings(unsigned int changeCount) {
       if (!added) {
          if (cntTimings < RCSWITCH_MAX_PULSES) {
             RCSwitch::pulsLengths[cntTimings] = dur;
-            RCSwitch::timings[i] = cntTimings++;
+            RCSwitch::compressedTimings[pos++] = '0' + cntTimings++;
          } else {
             cntTimings++;
          }
@@ -635,6 +640,8 @@ bool RECEIVE_ATTR RCSwitch::compressTimings(unsigned int changeCount) {
       RCSwitch::nReceivedBitlength = (changeCount - 1) / 2;
       RCSwitch::nReceivedDelay = cntTimings;
       RCSwitch::nReceivedProtocol = 1;
+      RCSwitch::compressedTimings[pos] = '\0';
+
       return true;
    }
 
@@ -659,8 +666,8 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
          if (!RCSwitch::compressTimings(changeCount)) {
             RCSwitch::nReceivedValue = 0;
             RCSwitch::nReceivedBitlength = 0;
-            repeatCount = 0;
          }
+         repeatCount = 0;
       }
       changeCount = 0;
    }

@@ -97,7 +97,7 @@ class RCSwitch {
     unsigned int getReceivedBitlength();
     unsigned int getReceivedDelay();
     unsigned int getReceivedProtocol();
-    unsigned int* getReceivedRawdata();
+    char* getReceivedRawdata();
     unsigned int* getReceivedRawLengths();
     #endif
   
@@ -155,6 +155,7 @@ class RCSwitch {
      * timings[0] contains sync timing, followed by a number of bits
      */
     static unsigned int timings[RCSWITCH_MAX_CHANGES];
+    static char compressedTimings[RCSWITCH_MAX_CHANGES];
     static unsigned int pulsLengths[RCSWITCH_MAX_PULSES];
     #endif
 
